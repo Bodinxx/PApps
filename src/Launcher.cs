@@ -39,6 +39,7 @@ public sealed class LauncherSettings
     public bool MainWindowMaximized { get; set; }
     public int AppItemPadding { get; set; } = 5;
     public int AppItemGap { get; set; } = 5;
+    public bool IncludePrereleases { get; set; }
 }
 
 public sealed class Launcher : Form
@@ -76,6 +77,7 @@ public sealed class Launcher : Form
     readonly Button checkUpdate = new() { Text = "Check for main app update…", AutoSize = true };
     readonly Button downloadUpdate = new() { Text = "Download and restart", AutoSize = true, Visible = false };
     readonly Label updateStatus = new() { AutoSize = true, MaximumSize = new Size(730, 0) };
+    readonly CheckBox includePrereleases = new() { Text = "Include prereleases and betas (testing builds)", AutoSize = true };
     UpdateRelease? availableUpdate;
     readonly CancellationTokenSource updateCancellation = new();
 
@@ -278,8 +280,18 @@ public sealed class Launcher : Form
         checkUpdate.Click += async (_, _) => await CheckUpdate();
         downloadUpdate.Click += async (_, _) => await DownloadUpdate();
         panel.Controls.Add(checkUpdate);
+        panel.Controls.Add(includePrereleases);
+        includePrereleases.CheckedChanged += (_, _) =>
+        {
+            if (loadingPreferences) return;
+            settings.IncludePrereleases = includePrereleases.Checked;
+            availableUpdate = null;
+            downloadUpdate.Visible = false;
+            updateStatus.Text = "Update channel changed. Check for updates again.";
+            Save();
+        };
         panel.Controls.Add(downloadUpdate);
-        updateStatus.Text = $"Installed version: {AppUpdater.CurrentVersion}";
+        updateStatus.Text = $"Installed version: {AppUpdater.CurrentDisplayVersion}";
         panel.Controls.Add(updateStatus);
         panel.Controls.Add(new Label { Text = "Update source: github.com/Bodinxx/PApps/releases", AutoSize = true });
         hidePortable.CheckedChanged += (_, _) => PreferencesChanged();
@@ -490,6 +502,7 @@ public sealed class Launcher : Form
         useLocalFonts.Checked = settings.UseLocalFonts;
         itemPadding.Value = Math.Clamp(settings.AppItemPadding, 0, 24);
         itemGap.Value = Math.Clamp(settings.AppItemGap, 0, 24);
+        includePrereleases.Checked = settings.IncludePrereleases;
         loadingPreferences = false;
         ApplyFonts();
         DetectDocuments();
@@ -516,20 +529,22 @@ public sealed class Launcher : Form
         checkUpdate.Enabled = false;
         downloadUpdate.Visible = false;
         availableUpdate = null;
+        includePrereleases.Enabled = false;
         updateStatus.Text = "Checking GitHub Releases…";
         try
         {
-            var release = await AppUpdater.CheckAsync(updateCancellation.Token);
+            var release = await AppUpdater.CheckAsync(updateCancellation.Token, settings.IncludePrereleases);
             if (IsDisposed) return;
-            if (release is null) { updateStatus.Text = "No published release is available yet."; return; }
-            if (release.Version <= AppUpdater.CurrentVersion) { updateStatus.Text = $"PApps {AppUpdater.CurrentVersion} is up to date."; return; }
+            if (release is null) { updateStatus.Text = "No compatible release is available on the selected update channel."; return; }
+            if (!await AppUpdater.IsUpdateAsync(release, settings.IncludePrereleases, updateCancellation.Token)) { updateStatus.Text = $"PApps {AppUpdater.CurrentDisplayVersion} is up to date on this channel."; return; }
+            if (IsDisposed) return;
             availableUpdate = release;
             downloadUpdate.Visible = true;
-            updateStatus.Text = $"Version {release.Version} is available (installed: {AppUpdater.CurrentVersion}).";
+            updateStatus.Text = $"{release.Tag}{(release.IsPrerelease ? " (testing build)" : "")} is available (installed: {AppUpdater.CurrentDisplayVersion}).";
         }
         catch (OperationCanceledException) { if (!IsDisposed) updateStatus.Text = "Update check timed out or was cancelled."; }
         catch (Exception ex) { if (!IsDisposed) updateStatus.Text = "Update check failed: " + ex.Message; }
-        finally { if (!IsDisposed) checkUpdate.Enabled = true; }
+        finally { if (!IsDisposed) checkUpdate.Enabled = includePrereleases.Enabled = true; }
     }
 
     async Task DownloadUpdate()
@@ -537,6 +552,7 @@ public sealed class Launcher : Form
         if (availableUpdate is null) return;
         if (!settingsWritable) { MessageBox.Show(this, "Repair the settings file before updating."); return; }
         checkUpdate.Enabled = downloadUpdate.Enabled = false;
+        includePrereleases.Enabled = false;
         try
         {
             updateStatus.Text = "Downloading update…";
@@ -550,7 +566,7 @@ public sealed class Launcher : Form
         }
         catch (OperationCanceledException) { if (!IsDisposed) updateStatus.Text = "Update download timed out or was cancelled."; }
         catch (Exception ex) { if (!IsDisposed) updateStatus.Text = "Update was not installed: " + ex.Message; }
-        finally { if (!IsDisposed) checkUpdate.Enabled = downloadUpdate.Enabled = true; }
+        finally { if (!IsDisposed) checkUpdate.Enabled = downloadUpdate.Enabled = includePrereleases.Enabled = true; }
     }
 
     void RefreshList()

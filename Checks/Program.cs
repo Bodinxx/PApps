@@ -34,6 +34,24 @@ internal static class Checks
             assets = new[] { new { name = "PApps.exe", browser_download_url = "https://github.com/Bodinxx/PApps/releases/download/v9.2.1/PApps.exe", digest = "sha256:" + new string('a', 64), size = 100 } }
         });
         if (AppUpdater.ParseRelease(validRelease).Version != new Version(9, 2, 1)) throw new Exception("Release version parsing failed");
+        foreach (var tag in new[] { "v9.2.1-beta.2", "v9.2.1-rc.1", "rc-9.2.1-1", "beta-9.2.1-2" })
+        {
+            var testing = validRelease.Replace("v9.2.1", tag).Replace("\"prerelease\":false", "\"prerelease\":true");
+            var parsed = AppUpdater.ParseRelease(testing, true);
+            if (parsed.Version != new Version(9, 2, 1) || !parsed.IsPrerelease) throw new Exception("Prerelease parsing failed: " + tag);
+            try { AppUpdater.ParseRelease(testing); throw new Exception("Stable channel accepted a prerelease"); }
+            catch (InvalidDataException) { }
+        }
+        var olderStable = validRelease.Replace("\"assets\":", "\"published_at\":\"2026-01-01T00:00:00Z\",\"assets\":");
+        var newerBeta = validRelease.Replace("v9.2.1", "v9.2.1-beta.3").Replace("\"prerelease\":false", "\"prerelease\":true").Replace("\"assets\":", "\"published_at\":\"2026-02-01T00:00:00Z\",\"assets\":");
+        var feed = "[" + olderStable + "," + newerBeta + "]";
+        if (AppUpdater.SelectLatest(feed, false)!.Tag != "v9.2.1" || AppUpdater.SelectLatest(feed, true)!.Tag != "v9.2.1-beta.3") throw new Exception("Channel selection failed");
+        var sameVersionBeta = new UpdateRelease(AppUpdater.CurrentVersion, "", new string('a', 64), 100, "rc-0.2.3-2", true);
+        if (!AppUpdater.IsUpdate(sameVersionBeta, true, new string('b', 64), false)) throw new Exception("Same-version candidate update missing");
+        if (AppUpdater.IsUpdate(sameVersionBeta, true, new string('a', 64), true)) throw new Exception("Identical candidate offered repeatedly");
+        if (AppUpdater.IsUpdate(sameVersionBeta, false, new string('b', 64), false)) throw new Exception("Stable channel offered beta");
+        if (AppUpdater.IsUpdate(sameVersionBeta with { Version = new Version(0, 0, 1) }, true, new string('b', 64), true)) throw new Exception("Testing channel offered a numeric downgrade");
+        if (!AppUpdater.IsUpdate(sameVersionBeta with { IsPrerelease = false }, false, new string('b', 64), true)) throw new Exception("Candidate to stable transition failed");
         foreach (var invalid in new[] { validRelease.Replace("sha256:", "md5:"), validRelease.Replace("Bodinxx/PApps/releases/download/", "other/project/releases/download/"), validRelease.Replace("v9.2.1", "v9.2.1-beta"), validRelease.Replace("\"draft\":false", "\"draft\":true") })
         {
             try { AppUpdater.ParseRelease(invalid); throw new Exception("Invalid release accepted"); }
@@ -221,13 +239,40 @@ internal static class Checks
             using var compact = new AppCard(workspace.Apps[0], "Editor", null, "Small Tiles", main.Font, () => { }, () => { }, spacingTips, 5, 5);
             using var spacious = new AppCard(workspace.Apps[0], "Editor", null, "Small Tiles", main.Font, () => { }, () => { }, spacingTips, 15, 12);
             if (spacious.Height - compact.Height != 20 || compact.Margin.Bottom != 5 || spacious.Margin.Right != 12) throw new Exception("Theme spacing not applied");
-            savedMain.AppItemPadding = 7; savedMain.AppItemGap = 3;
+            savedMain.AppItemPadding = 7; savedMain.AppItemGap = 3; savedMain.IncludePrereleases = true;
             SettingsStore.Save(savedMain);
             var spacingSaved = SettingsStore.Load();
-            if (spacingSaved.AppItemPadding != 7 || spacingSaved.AppItemGap != 3) throw new Exception("Theme spacing persistence failed");
+            if (spacingSaved.AppItemPadding != 7 || spacingSaved.AppItemGap != 3 || !spacingSaved.IncludePrereleases) throw new Exception("Theme spacing or update channel persistence failed");
+            var mainSettings = (LauncherSettings)typeof(MainWindow).GetField("settings", flags)!.GetValue(main)!;
+            for (var i = 0; i < 15; i++) mainSettings.Apps.Add(new AppEntry { Name = "Utility " + i, Category = "Utilities" });
+            SettingsStore.Save(mainSettings);
+            main.StartPosition = FormStartPosition.Manual;
+            main.Location = new Point(-20000, -20000);
+            main.Show(); // Native scroll positions are not applied while the owning form is hidden.
+            Application.DoEvents();
+            var libraryPanel = (FlowLayoutPanel)typeof(MainWindow).GetField("library", flags)!.GetValue(main)!;
+            libraryPanel.Dock = DockStyle.None;
+            libraryPanel.Size = new Size(430, 180);
+            _ = libraryPanel.Handle;
+            foreach (var view in picker.Items.Cast<string>())
+            {
+                picker.SelectedItem = view;
+                main.RenderApps();
+                libraryPanel.PerformLayout();
+                var lastSection = libraryPanel.Controls.OfType<FlowLayoutPanel>().Last();
+                var lastCards = lastSection.Controls.OfType<FlowLayoutPanel>().Single();
+                lastCards.PerformLayout();
+                var lastCard = lastCards.Controls.Cast<Control>().Last();
+                if (lastCard.Bottom > lastCards.ClientSize.Height || lastCards.Bottom > lastSection.ClientSize.Height)
+                    throw new Exception("Last utility is clipped within its category: " + view);
+                libraryPanel.AutoScrollPosition = new Point(0, int.MaxValue);
+                libraryPanel.PerformLayout();
+                var visibleBottom = lastSection.Top + lastCards.Top + lastCard.Bottom;
+                if (visibleBottom > libraryPanel.ClientSize.Height)
+                    throw new Exception("Last utility cannot be reached at maximum scroll: " + view + $" bottom={visibleBottom} viewport={libraryPanel.ClientSize.Height} scroll={libraryPanel.AutoScrollPosition} extent={libraryPanel.AutoScrollMinSize} display={libraryPanel.DisplayRectangle} section={lastSection.Bounds}");
+            }
         }
         Directory.Delete(root, true);
         Console.WriteLine("PASS: Setup and main-interface checks, startup routing, search, favourites, view persistence, fonts, settings migration and update validation.");
     }
 }
-

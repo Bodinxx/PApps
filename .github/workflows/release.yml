@@ -1,7 +1,7 @@
 name: Publish portable launcher
 on:
   push:
-    tags: ['v*']
+    tags: ['v*', 'rc-*', 'beta-*', 'alpha-*']
 permissions:
   contents: write
 jobs:
@@ -17,8 +17,13 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          if ($env:RELEASE_TAG -notmatch '^v(\d+\.\d+\.\d+)$') { throw 'Use vMAJOR.MINOR.PATCH tags' }
-          $releaseVersion = $Matches[1]
+          if ($env:RELEASE_TAG -match '^v?(\d+\.\d+\.\d+)(?:-((?:alpha|beta|rc)(?:[.-]?\d+)?))?$') {
+            $releaseVersion = $Matches[1]
+            if ($Matches[2]) { $releaseVersion += '-' + $Matches[2] }
+          } elseif ($env:RELEASE_TAG -match '^(alpha|beta|rc)-(\d+\.\d+\.\d+)(?:[.-](\d+))?$') {
+            $releaseVersion = $Matches[2] + '-' + $Matches[1]
+            if ($Matches[3]) { $releaseVersion += '.' + $Matches[3] }
+          } else { throw 'Use a version tag, optionally with an alpha, beta or rc suffix' }
           dotnet publish src/PApps.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=$releaseVersion -o release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Publish GitHub release
@@ -31,7 +36,11 @@ jobs:
           gh release view $env:RELEASE_TAG
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:RELEASE_TAG release/PApps.exe --clobber
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($env:RELEASE_TAG -match '(alpha|beta|rc)') { gh release edit $env:RELEASE_TAG --prerelease }
           } else {
-            gh release create $env:RELEASE_TAG release/PApps.exe --title $env:RELEASE_TAG --generate-notes --verify-tag
+            $releaseArgs = @('release', 'create', $env:RELEASE_TAG, 'release/PApps.exe', '--title', $env:RELEASE_TAG, '--generate-notes', '--verify-tag')
+            if ($env:RELEASE_TAG -match '(alpha|beta|rc)') { $releaseArgs += '--prerelease' }
+            gh @releaseArgs
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

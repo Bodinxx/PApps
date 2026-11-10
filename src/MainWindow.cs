@@ -25,6 +25,7 @@ public sealed class MainWindow : Form
     bool loading;
     bool ready;
     bool openingSettings;
+    bool sizingLibrary;
     CancellationTokenSource sizeCancellation = new();
 
     public MainWindow()
@@ -218,9 +219,9 @@ public sealed class MainWindow : Form
         favouriteHint.Text = favourites.Controls.Count == 0 ? "Star an app to keep it within reach." : $"{favourites.Controls.Count} pinned {(favourites.Controls.Count == 1 ? "app" : "apps")} · click to launch";
         foreach (var group in visible.GroupBy(a => string.IsNullOrWhiteSpace(a.Category) ? "Other" : a.Category, StringComparer.CurrentCultureIgnoreCase))
         {
-            var section = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = new Padding(0, 0, 0, 4) };
+            var section = new FlowLayoutPanel { AutoSize = false, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = new Padding(0, 0, 0, 4) };
             var heading = new CategoryHeader(group.Key, Font) { Margin = new Padding(0, 0, 0, 5) }; section.Controls.Add(heading);
-            var cards = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Margin = Padding.Empty };
+            var cards = new FlowLayoutPanel { AutoSize = false, WrapContents = true, Margin = Padding.Empty };
             foreach (var app in group) cards.Controls.Add(Card(app, viewPicker.Text));
             section.Controls.Add(cards); library.Controls.Add(section);
         }
@@ -234,17 +235,55 @@ public sealed class MainWindow : Form
         () => LaunchApp(app), () => { app.Favourite = !app.Favourite; Save(); BeginInvoke(new Action(RenderApps)); }, tips, settings.AppItemPadding, settings.AppItemGap);
     void ResizeGroups()
     {
-        var width = Math.Max(220, library.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 4);
-        foreach (FlowLayoutPanel section in library.Controls.OfType<FlowLayoutPanel>())
+        if (sizingLibrary) return;
+        sizingLibrary = true;
+        try
         {
-            section.MaximumSize = new Size(width, 0); section.MinimumSize = new Size(width, 0);
-            foreach (CategoryHeader heading in section.Controls.OfType<CategoryHeader>()) heading.Width = Math.Max(100, width - 10);
-            foreach (FlowLayoutPanel cards in section.Controls.OfType<FlowLayoutPanel>())
+            var width = Math.Max(220, library.ClientSize.Width - (library.VerticalScroll.Visible ? 0 : SystemInformation.VerticalScrollBarWidth) - 4);
+            var totalHeight = 0;
+            foreach (FlowLayoutPanel section in library.Controls.OfType<FlowLayoutPanel>())
             {
-                cards.MaximumSize = new Size(width, 0); cards.MinimumSize = new Size(width, 0);
-                if (viewPicker.Text is "List" or "Detailed Tiles") foreach (Control card in cards.Controls) card.Width = Math.Max(200, width - 10);
+                section.SuspendLayout();
+                section.Width = width;
+                var headingHeight = 0;
+                foreach (CategoryHeader heading in section.Controls.OfType<CategoryHeader>())
+                {
+                    heading.Width = Math.Max(100, width - 10);
+                    headingHeight += heading.Height + heading.Margin.Vertical;
+                }
+                var cardsHeight = 0;
+                foreach (FlowLayoutPanel cards in section.Controls.OfType<FlowLayoutPanel>())
+                {
+                    cards.SuspendLayout();
+                    cards.Width = width;
+                    var rowWidth = 0;
+                    var rowHeight = 0;
+                    var height = 0;
+                    foreach (Control card in cards.Controls)
+                    {
+                        if (viewPicker.Text is "List" or "Detailed Tiles") card.Width = Math.Max(100, width - card.Margin.Horizontal);
+                        var itemWidth = card.Width + card.Margin.Horizontal;
+                        if (rowWidth > 0 && rowWidth + itemWidth > width)
+                        {
+                            height += rowHeight;
+                            rowWidth = rowHeight = 0;
+                        }
+                        rowWidth += itemWidth;
+                        rowHeight = Math.Max(rowHeight, card.Height + card.Margin.Vertical);
+                    }
+                    // Nested AutoSize panels can cap their preferred height at the viewport,
+                    // leaving cards clipped inside a category even at maximum scroll.
+                    cards.Height = height + rowHeight;
+                    cardsHeight += cards.Height + cards.Margin.Vertical;
+                    cards.ResumeLayout();
+                }
+                section.Height = headingHeight + cardsHeight;
+                totalHeight += section.Height + section.Margin.Vertical;
+                section.ResumeLayout();
             }
+            library.AutoScrollMinSize = new Size(0, totalHeight + 8);
         }
+        finally { sizingLibrary = false; }
     }
 
     void ResizeFavourites()

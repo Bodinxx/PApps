@@ -4,3 +4,4 @@ Launcher/
 *.user
 launcher.settings.json
 *.tmp
+work/

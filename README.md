@@ -33,7 +33,7 @@ launcher.settings.json is saved beside the executable. At startup, existing sett
 
 ## Updates and releases
 
-Settings > Check for main app update reads the latest public stable release from https://github.com/Bodinxx/PApps/releases. The app compares the release tag with its embedded version. No releases currently exist, so the first check will report that none are available.
+Settings > Check for main app update reads the public release list from https://github.com/Bodinxx/PApps/releases. The app compares the release tag with its embedded version. No releases currently exist, so the first check will report that none are available.
 
 A compatible release must have:
 
@@ -83,3 +83,11 @@ Documents/Fonts and Apps folder/Settings appear in two-column rows with icons. H
 In 0.2.2, the document tree has no internal scrollbars. Its height follows the visible expanded nodes, leaving the middle sidebar as the single scroll area. Category headings use compact rounded light-blue bands with reduced spacing.
 
 In 0.2.3, Settings > Theming controls Padding inside app items and Gap between app items (0–24 px, default 5 px each). Both apply to every library and favourite view. Item sizes now follow icon/text content and the padding setting. Spacing saves automatically and applies when returning to the launcher. Reset spacing to 5 px restores both defaults.
+
+
+## Testing update channel
+Settings > Include prereleases and betas enables alpha, beta and release-candidate downloads. It is off by default and saved in launcher.settings.json. Check for main app update selects the most recently published compatible release on the selected channel; drafts and incompatible/missing assets are skipped. The testing channel includes stable releases too. Numeric downgrades are blocked.
+
+Accepted tags include v0.2.4, v0.2.4-beta.1, v0.2.4-rc.1, beta-0.2.3-1 and rc-0.2.3-1. The numeric executable version must match the numeric release version. Testing builds may share an internal version: the updater compares SHA-256 identities so a changed candidate can be installed and an identical executable is not repeatedly offered. A launcher.update.json receipt records an updater-installed release identity/channel without replacing personal settings. Returning to stable-only mode allows a same-version stable build after an updater-installed testing build; lower numeric versions are never installed.
+
+The release workflow now accepts v* and alpha-/beta-/rc- tags, builds prerelease informational versions for testing tags, and marks those GitHub releases as prereleases. Commit/push the workflow before tagging. Nothing is published automatically until a supported tag is pushed. Testers must first install a build containing the channel option; subsequent candidates can be downloaded and restarted through the app. Keep each candidate on a distinct tag and attach PApps.exe.
