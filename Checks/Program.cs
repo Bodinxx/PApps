@@ -28,10 +28,27 @@ internal static class Checks
             Console.WriteLine("PASS actual repository: " + string.Join(", ", names));
             return;
         }
+        var validRelease = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            draft = false, prerelease = false, tag_name = "v9.2.1",
+            assets = new[] { new { name = "PApps.exe", browser_download_url = "https://github.com/Bodinxx/PApps/releases/download/v9.2.1/PApps.exe", digest = "sha256:" + new string('a', 64), size = 100 } }
+        });
+        if (AppUpdater.ParseRelease(validRelease).Version != new Version(9, 2, 1)) throw new Exception("Release version parsing failed");
+        foreach (var invalid in new[] { validRelease.Replace("sha256:", "md5:"), validRelease.Replace("Bodinxx/PApps/releases/download/", "other/project/releases/download/"), validRelease.Replace("v9.2.1", "v9.2.1-beta"), validRelease.Replace("\"draft\":false", "\"draft\":true") })
+        {
+            try { AppUpdater.ParseRelease(invalid); throw new Exception("Invalid release accepted"); }
+            catch (InvalidDataException) { }
+        }
         var root = Path.Combine(Path.GetTempPath(), "PApps-check-" + Guid.NewGuid());
         Directory.CreateDirectory(Path.Combine(root, "Apps", "EditorPortable", "App", "AppInfo"));
         File.WriteAllText(Path.Combine(root, "Apps", "EditorPortable", "EditorPortable.exe"), "fixture");
         File.WriteAllText(Path.Combine(root, "IgnoredOutsideApps.exe"), "fixture");
+        var checksumFile = Path.Combine(root, "hash-test.txt");
+        File.WriteAllText(checksumFile, "checksum fixture");
+        var checksum = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(checksumFile)));
+        AppUpdater.Verify(checksumFile, checksum);
+        try { AppUpdater.Verify(checksumFile, new string('0', 64)); throw new Exception("Corrupt update accepted"); }
+        catch (InvalidDataException) { }
         File.WriteAllText(Path.Combine(root, "Apps", "EditorPortable", "App", "AppInfo", "appinfo.ini"), "[Details]\nName=Example Editor\nCategory=Development\n[Control]\nStart=EditorPortable.exe");
         using var form = new Launcher();
         var flags = BindingFlags.NonPublic | BindingFlags.Instance;
@@ -95,7 +112,7 @@ internal static class Checks
         var fontItems = (ListBox)typeof(Launcher).GetField("fontList", flags)!.GetValue(form)!;
         var localCatalog = (FontCatalog)typeof(Launcher).GetField("fontCatalog", flags)!.GetValue(form)!;
         if (fontItems.Items.Count == 0 || !localCatalog.IsLocal((string)fontItems.Items[0])) throw new Exception("Refreshed local fonts not visible first");
-        var tabs = form.Controls.OfType<TabControl>().Single();
+        var tabs = form.Controls.OfType<TableLayoutPanel>().Single().Controls.OfType<TabControl>().Single();
         tabs.SelectedTab = tabs.TabPages.Cast<TabPage>().Single(t => t.Text == "Fonts");
         var responsive = (TableLayoutPanel)tabs.SelectedTab.Controls[0];
         responsive.Dock = DockStyle.None;
@@ -153,8 +170,64 @@ internal static class Checks
         settings.Apps.Add(new AppEntry { Name = "Shared", Executable = "Apps\\EditorPortable\\second.exe" });
         try { uninstallFolder.Invoke(form, [settings.Apps[0]]); throw new Exception("Shared app folder accepted"); }
         catch (TargetInvocationException e) when (e.InnerException is InvalidOperationException) { }
+        var testSettings = Path.Combine(AppContext.BaseDirectory, "launcher.settings.json");
+        File.WriteAllText(testSettings, "{\"Repository\":\"\",\"SetupFontFace\":\"Arial\",\"FutureOption\":{\"preserve\":true},\"Apps\":[{\"Name\":\"Existing app\",\"Category\":\"Custom\",\"Description\":\"Keep me\",\"FutureAppOption\":42}]}");
+        using (var migrated = new Launcher())
+        {
+            typeof(Launcher).GetMethod("LoadSettings", flags)!.Invoke(migrated, null);
+            using var migratedJson = System.Text.Json.JsonDocument.Parse(File.ReadAllText(testSettings));
+            var saved = migratedJson.RootElement;
+            if (saved.GetProperty("SetupFontFace").GetString() != "Arial" || !saved.GetProperty("FutureOption").GetProperty("preserve").GetBoolean()
+                || saved.GetProperty("Apps")[0].GetProperty("FutureAppOption").GetInt32() != 42 || saved.GetProperty("Apps")[0].GetProperty("Description").GetString() != "Keep me"
+                || !saved.TryGetProperty("UseLocalFonts", out _)) throw new Exception("Non-destructive settings migration failed");
+        }
+        File.Delete(testSettings);
+        using (var firstRun = new Launcher())
+        {
+            typeof(Launcher).GetMethod("LoadSettings", flags)!.Invoke(firstRun, null);
+            if (!File.Exists(testSettings)) throw new Exception("First-run settings creation failed");
+        }
+        if (!SettingsStore.NeedsSetup(new LauncherSettings { Repository = root })) throw new Exception("New location bypasses Setup");
+        if (SettingsStore.NeedsSetup(new LauncherSettings { Repository = root, SetupCompletedFor = root })) throw new Exception("Configured location still requires Setup");
+        if (!SettingsStore.NeedsSetup(new LauncherSettings { Repository = root, SetupCompletedFor = Path.Combine(root, "another") })) throw new Exception("Changed location bypasses Setup");
+        var workspace = new LauncherSettings
+        {
+            Repository = root, SetupCompletedFor = root,
+            Apps = [new AppEntry { Name = "Editor", Category = "Development", Favourite = true }, new AppEntry { Name = "Grid", Category = "Office", Description = "Spreadsheet editor" }]
+        };
+        SettingsStore.Save(workspace);
+        using (var main = new MainWindow())
+        {
+            main.Reload();
+            var mainSearch = (TextBox)typeof(MainWindow).GetField("searchBox", flags)!.GetValue(main)!;
+            mainSearch.Text = "spreadsheet";
+            if (main.FilteredApps().Single().Name != "Grid") throw new Exception("Main description search failed");
+            mainSearch.Text = "development";
+            if (main.FilteredApps().Single().Name != "Editor") throw new Exception("Main category search failed");
+            mainSearch.Text = "no match";
+            if (main.FilteredApps().Any()) throw new Exception("Main empty search failed");
+            mainSearch.Text = "";
+            var picker = (ComboBox)typeof(MainWindow).GetField("viewPicker", flags)!.GetValue(main)!;
+            foreach (var view in new[] { "Large Icons", "Medium Icons", "Small Icons", "List", "Large Tiles", "Medium Tiles", "Small Tiles", "Detailed Tiles" })
+            {
+                picker.SelectedItem = view; main.RenderApps();
+                var favPanel = (FlowLayoutPanel)typeof(MainWindow).GetField("favourites", flags)!.GetValue(main)!;
+                using var expectedCard = new AppCard(workspace.Apps[0], "Editor", null, view, main.Font, () => { }, () => { }, new ToolTip());
+                if (favPanel.Controls[0].Height != expectedCard.Height) throw new Exception("Favourites view did not track library: " + view);
+            }
+            var savedMain = SettingsStore.Load();
+            if (!savedMain.Apps[0].Favourite || savedMain.MainView != "Detailed Tiles") throw new Exception("Main preferences persistence failed");
+            using var spacingTips = new ToolTip();
+            using var compact = new AppCard(workspace.Apps[0], "Editor", null, "Small Tiles", main.Font, () => { }, () => { }, spacingTips, 5, 5);
+            using var spacious = new AppCard(workspace.Apps[0], "Editor", null, "Small Tiles", main.Font, () => { }, () => { }, spacingTips, 15, 12);
+            if (spacious.Height - compact.Height != 20 || compact.Margin.Bottom != 5 || spacious.Margin.Right != 12) throw new Exception("Theme spacing not applied");
+            savedMain.AppItemPadding = 7; savedMain.AppItemGap = 3;
+            SettingsStore.Save(savedMain);
+            var spacingSaved = SettingsStore.Load();
+            if (spacingSaved.AppItemPadding != 7 || spacingSaved.AppItemGap != 3) throw new Exception("Theme spacing persistence failed");
+        }
         Directory.Delete(root, true);
-        Console.WriteLine("PASS: discovery, search, containment, persistence, category/title sorting, display names, Documents detection, font preferences, setup-only behavior.");
+        Console.WriteLine("PASS: Setup and main-interface checks, startup routing, search, favourites, view persistence, fonts, settings migration and update validation.");
     }
 }
 

@@ -1,0 +1,37 @@
+name: Publish portable launcher
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build versioned portable executable
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v(\d+\.\d+\.\d+)$') { throw 'Use vMAJOR.MINOR.PATCH tags' }
+          $releaseVersion = $Matches[1]
+          dotnet publish src/PApps.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=$releaseVersion -o release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release view $env:RELEASE_TAG
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG release/PApps.exe --clobber
+          } else {
+            gh release create $env:RELEASE_TAG release/PApps.exe --title $env:RELEASE_TAG --generate-notes --verify-tag
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -1,46 +1,85 @@
-# PApps Setup
+# PApps
 
-Run Launcher/PApps.exe. This is now a configuration screen; app launching has been removed. Double-click an app or press Enter/F2 to edit its name and category.
+Windows portable-app configuration utility built with C# / .NET 10 / Windows Forms.
 
-## Applications
-Choose your main apps folder, scan recursively, add executables, edit entries, or remove library entries. Files are never deleted by removing an entry. The table sorts by category and then displayed application title. App icons come from the executables. PortableApps manifests are preferred; otherwise ordinary executables are discovered. CLI companions, common uninstallers and directory links are skipped.
+Run Launcher/PApps.exe from a writable local folder. No installation is required.
 
-## Settings
-Font face and Large fonts are separate preferences for Setup and the future main interface. Setup uses 10 or 13 point text; the main-interface preview uses 10 or 16 points. Main-interface preferences are saved for future use.
+## Main folder
 
-Hide Portable removes Portable from displayed names without altering saved names or executable paths.
+Choose the main folder. PApps creates this structure when it is missing:
 
-If the main apps folder contains documents, PApps records it as its My Documents location. Detection refreshes on startup, folder changes and scans, or with Refresh documents folder. This does not alter the Windows Documents folder or redirect other applications' file dialogs.
+    Main folder/
+      Apps/
+      Documents/
+        Fonts/
 
-Check for main app update is a placeholder until a Git update location is supplied. It clearly reports that no update check was performed.
+Move each portable app folder into Apps and scan. Scans recurse only within Apps. Already recorded relative paths are migrated when the old file is absent and its counterpart is discovered under Apps; edited names, categories and descriptions are preserved. PApps does not move files automatically.
 
-## Theming
-Reserved blank tab.
+## Setup
 
-## Get Apps
-Browser links to PortableApps.com, The Portable Freeware Collection and winPenPack. Download/extract into the main apps folder and scan, or use Add app. PApps does not download or install apps.
+Applications sort by category and displayed title. Double-click or press Enter/F2 to edit an app. Descriptions support multiple lines; the table displays up to 500 characters. Removing an entry leaves its files in place. Uninstall confirms the exact app folder before permanently deleting its files and app data; it blocks the main folder, Documents, shared app folders and directory links.
 
-## Development
-C# / .NET 10 / Windows Forms. Open src/PApps.csproj with a compatible Visual Studio version.
+Window dimensions and the first three column widths save automatically. Description fills the remaining width, or uses a standard width with scrolling when space is limited.
+
+Settings includes the Hide Portable display option, Documents location and update controls. Theming is reserved. Get Apps opens external download directories in your browser.
+
+## Fonts
+
+Windows and PApps-local fonts appear in their typeface with a source label. Put .ttf, .otf or .ttc files directly inside Documents/Fonts and refresh. Local families appear first; a local-only filter and name search are available. Options sit beside the list in wide windows and above it in narrow windows. Separate Setup and future main-interface font preferences are saved. Local fonts are loaded only inside PApps. Invalid files are skipped; unavailable selected fonts fall back to Segoe UI. Restart after replacing an already loaded font file.
+
+## Settings compatibility
+
+launcher.settings.json is saved beside the executable. At startup, existing settings are read and missing options are written with their defaults. Existing values and unknown fields, including unknown per-app fields, are preserved. A missing file is created. An unreadable or invalid file is left untouched, with saving disabled until it is repaired and PApps restarted.
+
+## Updates and releases
+
+Settings > Check for main app update reads the latest public stable release from https://github.com/Bodinxx/PApps/releases. The app compares the release tag with its embedded version. No releases currently exist, so the first check will report that none are available.
+
+A compatible release must have:
+
+- A version tag in vMAJOR.MINOR.PATCH format, for example v0.1.0.
+- A Windows x64 self-contained single-file asset named PApps.exe.
+- GitHub's SHA-256 digest for that uploaded asset.
+- An executable product version matching the release tag.
+
+When a newer compatible release exists, Download and restart downloads it, checks its size, SHA-256 digest and embedded version, then starts a private helper that waits for PApps to exit, atomically replaces only PApps.exe and restarts it. Settings, Apps, Documents and fonts are not replaced. The previous executable is retained as previous.exe in the .papps-update-* staging folder beside PApps.exe for recovery. Failed downloads or updates may leave staging folders; they can be removed after PApps and the updater have closed. No credentials are stored or required for the public repository. Checks are manual.
+
+The local baseline version is 0.1.0. The .github/workflows/release.yml workflow builds and publishes PApps.exe when a vMAJOR.MINOR.PATCH tag is pushed. Commit and push the source/workflow first, then push the version tag. This workflow has not been run or published by this chat. Only trusted commits should be tagged for release.
+
+For a manual release build:
+
+    dotnet publish src/PApps.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=0.1.0 -o Launcher
+
+Attach Launcher/PApps.exe to the matching GitHub release. launcher.settings.json must never be included in an update asset.
+
+## Development checks
 
     dotnet run --project Checks/Checks.csproj -c Release
-    dotnet publish src/PApps.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o Launcher
 
-Settings are saved beside the executable in launcher.settings.json. Remote caching and package updates are not implemented.
+Checks use isolated fixtures and cover discovery, sorting, descriptions, fonts, responsive layout, uninstall guards, release validation, checksum verification and settings migration. No real applications are uninstalled. A real update cannot be tested against GitHub until a compatible release is published.
 
-Each app has an optional multiline Description in Edit app. Existing entries default to an empty description. Newly discovered PortableApps entries import Details/Description from appinfo.ini. Rescanning preserves edited descriptions. Descriptions are saved for use in the future main interface and tooltips.
+Open Apps folder opens the configured main folder's Apps subfolder in File Explorer, creating Apps if missing. Choose a main folder first. After copying new portable app folders there, choose Scan folder.
 
-The Description table column shows a single-line preview of up to 500 characters; the full text stays in Edit app. The first three column widths and window dimensions/maximized state save automatically after resizing and on close. Description fills the remaining width when at least 160 pixels remain; otherwise it uses 320 pixels with horizontal scrolling.
+## Main interface (0.2.0)
+Normal launches now open the main PApps window. Missing/invalid settings or a main folder not yet marked configured opens Setup; choose a main folder and select Open launcher. Existing installations are treated as already configured when upgrading from older settings without that marker. Changing the main folder in Setup requires confirming it with Open launcher. Settings & options returns to Setup without launching another copy.
 
-Remove only removes a library entry. Uninstall permanently deletes the selected application's top-level folder within the main apps folder, including its app data, after showing the exact folder and requesting confirmation. It refuses main-folder executables, Documents, shared library app folders, apps outside the repository, and directory links. Close the app before uninstalling. Failed deletion can leave a partially removed folder; the library entry is retained.
+The main interface provides:
+- Favourites above the library; toggle the star on any app. Favourites persist in settings.
+- A library grouped by category, with List, Small, Medium and Large views.
+- Click an app card to launch. Enter/Space also launch a focused card; Ctrl+D toggles its favourite status.
+- Tooltips showing full descriptions.
+- Sidebar search matching application names, categories and descriptions, filtering favourites and the library.
+- Documents, Fonts and Apps folder links.
+- A Show document files option for a lazy expandable document tree. Folders expand with the arrow; double-click a file to open it.
+- Settings/options, help, close, app count and a background calculation of Apps-folder file size. The size calculation skips directory links and reports metadata size rather than physical disk usage.
 
-## Fonts tab
-Font settings now live on the Fonts tab. Windows and PApps-local families are listed with names rendered in their own typeface, a source label and a font-name search box. Separate Setup and future main-interface font selections remain saved independently.
+Main window dimensions, maximized state, selected view, document browsing and favourites are saved separately from Setup preferences. The main interface uses the configured main font, including PApps-local fonts. It uses a navy sidebar, neutral workspace and teal accents. The Theming tab remains reserved.
 
-When an available main apps folder is selected or opened, Documents and Documents\Fonts are created if absent. Existing files are preserved. Add .ttf, .otf or .ttc files directly inside Documents\Fonts and select Refresh fonts. Open fonts folder opens that location. Local-font loading can be disabled. Fonts are registered privately inside the PApps process, never installed for Windows or other apps. Missing selected fonts fall back to Segoe UI. Invalid font files are skipped. Restart PApps after replacing an already loaded font file.
+## Views and sidebar (0.2.1)
+The view selector now applies to both favourites and the library. Windows-style views are Large Icons, Medium Icons, Small Icons and List. The original card views remain available as Large Tiles, Medium Tiles, Small Tiles and Detailed Tiles. Older saved Small/Medium/Large choices migrate to the corresponding tiled labels; the original List migrates to Detailed Tiles.
 
+Documents/Fonts and Apps folder/Settings appear in two-column rows with icons. Help and Close PApps share an equal-width bottom row with icons. Find stays fixed at the top, while information and the bottom actions stay fixed at the bottom. All middle workspace content, including the document browser, lives inside a scrolling region.
 
-## Main folder structure
-The selected main folder contains Apps and Documents. Fonts are inside Documents\Fonts. Missing default folders are created automatically. Scans recurse only inside Apps, ignoring executables elsewhere in the main folder. Place each portable app folder inside Apps, then scan. Previously recorded relative app paths are updated when the original file is absent and the same relative app location is found under Apps; edited metadata is preserved. Existing files are not moved automatically. Uninstall is restricted to an app folder within Apps.
+In 0.2.2, the document tree has no internal scrollbars. Its height follows the visible expanded nodes, leaving the middle sidebar as the single scroll area. Category headings use compact rounded light-blue bands with reduced spacing.
 
-The Fonts tab places options on the left and the font list on the right at wide widths, stacking the list below on narrow windows. Refresh rechecks the current Documents\Fonts folder and rebuilds the visible list. Local font families appear first; use Show PApps local fonts only to filter the list. Font files must be directly inside Documents\Fonts.
+In 0.2.3, Settings > Theming controls Padding inside app items and Gap between app items (0–24 px, default 5 px each). Both apply to every library and favourite view. Item sizes now follow icon/text content and the padding setting. Spacing saves automatically and applies when returning to the launcher. Reset spacing to 5 px restores both defaults.

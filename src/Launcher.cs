@@ -4,14 +4,19 @@ namespace PApps;
 
 public sealed class AppEntry
 {
+    [System.Text.Json.Serialization.JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalSettings { get; set; }
     public string Name { get; set; } = "";
     public string Executable { get; set; } = "";
     public string Category { get; set; } = "Other";
     public string Description { get; set; } = "";
+    public bool Favourite { get; set; }
 }
 
 public sealed class LauncherSettings
 {
+    [System.Text.Json.Serialization.JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalSettings { get; set; }
     public string Repository { get; set; } = "";
     public List<AppEntry> Apps { get; set; } = [];
     public string SetupFontFace { get; set; } = "Segoe UI";
@@ -25,6 +30,15 @@ public sealed class LauncherSettings
     public bool WindowMaximized { get; set; }
     public int[] ColumnWidths { get; set; } = [270, 140, 380];
     public bool UseLocalFonts { get; set; } = true;
+    public string SetupCompletedFor { get; set; } = "";
+    public string MainView { get; set; } = "Medium Tiles";
+    public bool MainViewNamesUpdated { get; set; }
+    public bool ExpandDocuments { get; set; }
+    public int MainWindowWidth { get; set; } = 1120;
+    public int MainWindowHeight { get; set; } = 800;
+    public bool MainWindowMaximized { get; set; }
+    public int AppItemPadding { get; set; } = 5;
+    public int AppItemGap { get; set; } = 5;
 }
 
 public sealed class Launcher : Form
@@ -39,6 +53,7 @@ public sealed class Launcher : Form
     readonly Dictionary<string, int> iconIndexes = new(StringComparer.OrdinalIgnoreCase);
     readonly Label documents = new() { AutoSize = true, MaximumSize = new Size(730, 0) };
     readonly CheckBox hidePortable = new() { Text = "Hide Portable in application names", AutoSize = true };
+    readonly CheckBox expandDocumentsPreference = new() { Text = "Show document files in the main interface sidebar", AutoSize = true };
     readonly CheckBox setupLarge = new() { Text = "Large fonts", AutoSize = true };
     readonly CheckBox mainLarge = new() { Text = "Large fonts", AutoSize = true };
     readonly ComboBox setupFace = new() { Width = 230, DropDownStyle = ComboBoxStyle.DropDownList };
@@ -55,6 +70,14 @@ public sealed class Launcher : Form
     readonly TextBox fontSearch = new() { PlaceholderText = "Search font names…", Dock = DockStyle.Fill };
     readonly ListBox fontList = new() { Dock = DockStyle.Fill, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 42, IntegralHeight = false };
     readonly CheckBox localFontsOnly = new() { Text = "Show PApps local fonts only", AutoSize = true };
+    readonly NumericUpDown itemPadding = new() { Minimum = 0, Maximum = 24, Value = 5, Width = 90, AccessibleName = "Padding inside app items in pixels" };
+    readonly NumericUpDown itemGap = new() { Minimum = 0, Maximum = 24, Value = 5, Width = 90, AccessibleName = "Gap between app items in pixels" };
+    bool settingsWritable = true;
+    readonly Button checkUpdate = new() { Text = "Check for main app update…", AutoSize = true };
+    readonly Button downloadUpdate = new() { Text = "Download and restart", AutoSize = true, Visible = false };
+    readonly Label updateStatus = new() { AutoSize = true, MaximumSize = new Size(730, 0) };
+    UpdateRelease? availableUpdate;
+    readonly CancellationTokenSource updateCancellation = new();
 
     public Launcher()
     {
@@ -77,7 +100,7 @@ public sealed class Launcher : Form
         layout.Controls.Add(folderRow, 0, 1);
         layout.Controls.Add(search, 0, 2);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill };
-        actions.Controls.AddRange([Button("Scan folder", Scan), Button("Add app", Add), Button("Edit app", Edit), Button("Remove", Remove), Button("Uninstall", Uninstall)]);
+        actions.Controls.AddRange([Button("Open Apps folder", OpenAppsFolder), Button("Scan folder", Scan), Button("Add app", Add), Button("Edit app", Edit), Button("Remove", Remove), Button("Uninstall", Uninstall)]);
         layout.Controls.Add(actions, 0, 3);
         apps.Columns.Add("Application", 270);
         apps.Columns.Add("Category", 140);
@@ -86,7 +109,7 @@ public sealed class Launcher : Form
         apps.SmallImageList = appIcons;
         appIcons.Images.Add(SystemIcons.Application);
         FormClosed += (_, _) => { appIcons.Dispose(); layoutSaveTimer.Dispose(); };
-        Disposed += (_, _) => fontCatalog.Dispose();
+        Disposed += (_, _) => { fontCatalog.Dispose(); updateCancellation.Cancel(); updateCancellation.Dispose(); };
         layout.Controls.Add(apps, 0, 4);
         layout.Controls.Add(status, 0, 5);
         var tabs = new TabControl { Dock = DockStyle.Fill };
@@ -98,8 +121,24 @@ public sealed class Launcher : Form
         getAppsTab.Controls.Add(BuildGetApps());
         var fontsTab = new TabPage("Fonts");
         fontsTab.Controls.Add(BuildFonts());
-        tabs.TabPages.AddRange([libraryTab, preferencesTab, fontsTab, new TabPage("Theming"), getAppsTab]);
-        Controls.Add(tabs);
+        var themeTab = new TabPage("Theming");
+        themeTab.Controls.Add(BuildTheming());
+        tabs.TabPages.AddRange([libraryTab, preferencesTab, fontsTab, themeTab, getAppsTab]);
+        var setupRoot = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+        setupRoot.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        setupRoot.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        setupRoot.Controls.Add(tabs, 0, 0);
+        var footer = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(10) };
+        footer.Controls.Add(Button("Open launcher", () =>
+        {
+            if (!Directory.Exists(settings.Repository)) { MessageBox.Show(this, "Choose an available main folder first.", "Open launcher"); return; }
+            settings.SetupCompletedFor = Path.GetFullPath(settings.Repository);
+            if (!Save()) return;
+            DialogResult = DialogResult.OK;
+            Close();
+        }));
+        setupRoot.Controls.Add(footer, 0, 1);
+        Controls.Add(setupRoot);
         search.TextChanged += (_, _) => RefreshList();
         apps.DoubleClick += (_, _) => Edit();
         apps.KeyDown += (_, e) =>
@@ -203,19 +242,46 @@ public sealed class Launcher : Form
         return panel;
     }
 
+    Control BuildTheming()
+    {
+        var panel = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24), AutoScroll = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
+        panel.Controls.Add(new Label { Text = "App item spacing", AutoSize = true, Font = new Font(Font, FontStyle.Bold) });
+        panel.Controls.Add(new Label { Text = "Padding inside tiles and icons (px)", AutoSize = true, Margin = new Padding(3, 18, 3, 4) });
+        panel.Controls.Add(itemPadding);
+        panel.Controls.Add(new Label { Text = "Gap between tiles and icons (px)", AutoSize = true, Margin = new Padding(3, 18, 3, 4) });
+        panel.Controls.Add(itemGap);
+        panel.Controls.Add(new Label { Text = "Applies to every view in the library and favourites. Changes are saved automatically and appear when you return to the launcher.", AutoSize = true, MaximumSize = new Size(620, 0), Margin = new Padding(3, 18, 3, 12) });
+        panel.Controls.Add(Button("Reset spacing to 5 px", () => { itemPadding.Value = 5; itemGap.Value = 5; }));
+        void SaveSpacing()
+        {
+            if (loadingPreferences) return;
+            settings.AppItemPadding = (int)itemPadding.Value;
+            settings.AppItemGap = (int)itemGap.Value;
+            Save();
+        }
+        itemPadding.ValueChanged += (_, _) => SaveSpacing();
+        itemGap.ValueChanged += (_, _) => SaveSpacing();
+        return panel;
+    }
+
     Control BuildPreferences()
     {
         var panel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(24) };
         hidePortable.Margin = new Padding(3, 12, 3, 12);
         panel.Controls.Add(hidePortable);
+        panel.Controls.Add(expandDocumentsPreference);
+        expandDocumentsPreference.CheckedChanged += (_, _) => PreferencesChanged();
         panel.Controls.Add(new Label { Text = "My Documents", AutoSize = true, Font = new Font(Font, FontStyle.Bold) });
         panel.Controls.Add(documents);
         panel.Controls.Add(Button("Refresh documents folder", () => { DetectDocuments(); RefreshFonts(); Save(); }));
-        var updates = Button("Check for main app update…", () => MessageBox.Show(this,
-            "The Git update location has not been configured yet. No update check was performed.", "Main app updates", MessageBoxButtons.OK, MessageBoxIcon.Information));
-        updates.Margin = new Padding(3, 22, 3, 3);
-        panel.Controls.Add(updates);
-        panel.Controls.Add(new Label { Text = "Update source: not configured", AutoSize = true });
+        checkUpdate.Margin = new Padding(3, 22, 3, 3);
+        checkUpdate.Click += async (_, _) => await CheckUpdate();
+        downloadUpdate.Click += async (_, _) => await DownloadUpdate();
+        panel.Controls.Add(checkUpdate);
+        panel.Controls.Add(downloadUpdate);
+        updateStatus.Text = $"Installed version: {AppUpdater.CurrentVersion}";
+        panel.Controls.Add(updateStatus);
+        panel.Controls.Add(new Label { Text = "Update source: github.com/Bodinxx/PApps/releases", AutoSize = true });
         hidePortable.CheckedChanged += (_, _) => PreferencesChanged();
         return panel;
     }
@@ -359,6 +425,7 @@ public sealed class Launcher : Form
         settings.SetupLargeFonts = setupLarge.Checked;
         settings.MainLargeFonts = mainLarge.Checked;
         settings.HidePortable = hidePortable.Checked;
+        settings.ExpandDocuments = expandDocumentsPreference.Checked;
         ApplyFonts();
         Save();
         RefreshList();
@@ -404,12 +471,13 @@ public sealed class Launcher : Form
 
     void LoadSettings()
     {
+        settingsWritable = true;
         try
         {
-            if (File.Exists(settingsPath)) settings = JsonSerializer.Deserialize<LauncherSettings>(File.ReadAllText(settingsPath)) ?? new();
+            if (File.Exists(settingsPath)) settings = SettingsStore.Load();
             settings.Apps ??= [];
         }
-        catch (Exception ex) { ShowError("Could not read settings. The existing file has been kept.", ex); }
+        catch (Exception ex) { settingsWritable = false; ShowError("Could not read settings. The file will be left untouched. Close PApps and repair the file before saving changes.", ex); }
         loadingPreferences = true;
         if (!setupFace.Items.Contains(settings.SetupFontFace)) setupFace.Items.Add(settings.SetupFontFace);
         if (!mainFace.Items.Contains(settings.MainFontFace)) mainFace.Items.Add(settings.MainFontFace);
@@ -418,17 +486,22 @@ public sealed class Launcher : Form
         setupLarge.Checked = settings.SetupLargeFonts;
         mainLarge.Checked = settings.MainLargeFonts;
         hidePortable.Checked = settings.HidePortable;
+        expandDocumentsPreference.Checked = settings.ExpandDocuments;
         useLocalFonts.Checked = settings.UseLocalFonts;
+        itemPadding.Value = Math.Clamp(settings.AppItemPadding, 0, 24);
+        itemGap.Value = Math.Clamp(settings.AppItemGap, 0, 24);
         loadingPreferences = false;
         ApplyFonts();
         DetectDocuments();
         RefreshFonts();
         RestoreLayout();
         RefreshList();
+        if (settingsWritable) Save(); // Persist defaults for new options without losing existing or unknown settings.
     }
 
     bool Save()
     {
+        if (!settingsWritable) return false;
         try
         {
             File.WriteAllText(settingsPath + ".tmp", JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true }));
@@ -436,6 +509,48 @@ public sealed class Launcher : Form
             return true;
         }
         catch (Exception ex) { ShowError("Could not save settings. Put the launcher in a folder you can write to.", ex); return false; }
+    }
+
+    async Task CheckUpdate()
+    {
+        checkUpdate.Enabled = false;
+        downloadUpdate.Visible = false;
+        availableUpdate = null;
+        updateStatus.Text = "Checking GitHub Releases…";
+        try
+        {
+            var release = await AppUpdater.CheckAsync(updateCancellation.Token);
+            if (IsDisposed) return;
+            if (release is null) { updateStatus.Text = "No published release is available yet."; return; }
+            if (release.Version <= AppUpdater.CurrentVersion) { updateStatus.Text = $"PApps {AppUpdater.CurrentVersion} is up to date."; return; }
+            availableUpdate = release;
+            downloadUpdate.Visible = true;
+            updateStatus.Text = $"Version {release.Version} is available (installed: {AppUpdater.CurrentVersion}).";
+        }
+        catch (OperationCanceledException) { if (!IsDisposed) updateStatus.Text = "Update check timed out or was cancelled."; }
+        catch (Exception ex) { if (!IsDisposed) updateStatus.Text = "Update check failed: " + ex.Message; }
+        finally { if (!IsDisposed) checkUpdate.Enabled = true; }
+    }
+
+    async Task DownloadUpdate()
+    {
+        if (availableUpdate is null) return;
+        if (!settingsWritable) { MessageBox.Show(this, "Repair the settings file before updating."); return; }
+        checkUpdate.Enabled = downloadUpdate.Enabled = false;
+        try
+        {
+            updateStatus.Text = "Downloading update…";
+            var progress = new Progress<int>(percent => { if (!IsDisposed) updateStatus.Text = $"Downloading update… {percent}%"; });
+            var request = await AppUpdater.PrepareAsync(availableUpdate, progress, updateCancellation.Token);
+            if (IsDisposed) return;
+            CaptureLayout();
+            if (!Save()) throw new IOException("Settings could not be saved; update was not started.");
+            AppUpdater.StartHelper(request);
+            Close();
+        }
+        catch (OperationCanceledException) { if (!IsDisposed) updateStatus.Text = "Update download timed out or was cancelled."; }
+        catch (Exception ex) { if (!IsDisposed) updateStatus.Text = "Update was not installed: " + ex.Message; }
+        finally { if (!IsDisposed) checkUpdate.Enabled = downloadUpdate.Enabled = true; }
     }
 
     void RefreshList()
@@ -470,6 +585,23 @@ public sealed class Launcher : Form
         }
     }
 
+    void OpenAppsFolder()
+    {
+        if (string.IsNullOrWhiteSpace(settings.Repository))
+        {
+            MessageBox.Show(this, "Choose a main folder first.", "Open Apps folder");
+            return;
+        }
+        try
+        {
+            if (!Directory.Exists(settings.Repository)) throw new DirectoryNotFoundException("The main folder is unavailable. Check that its drive is connected.");
+            var folder = Path.GetFullPath(Path.Combine(settings.Repository, "Apps"));
+            Directory.CreateDirectory(folder);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(folder) { UseShellExecute = true });
+        }
+        catch (Exception ex) { ShowError("Could not open the Apps folder.", ex); }
+    }
+
     void ChooseFolder()
     {
         using var dialog = new FolderBrowserDialog { Description = "Select the main folder containing Apps and Documents", UseDescriptionForTitle = true };
@@ -477,6 +609,7 @@ public sealed class Launcher : Form
         if (!string.Equals(settings.Repository, dialog.SelectedPath, StringComparison.OrdinalIgnoreCase) && settings.Apps.Count > 0 &&
             MessageBox.Show(this, "Switching folders clears this app list. Your application files will stay in place. Continue?", "Switch apps folder", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
         settings.Repository = dialog.SelectedPath;
+        settings.SetupCompletedFor = "";
         DetectDocuments();
         RefreshFonts();
         settings.Apps.Clear();
