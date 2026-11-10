@@ -1,0 +1,6 @@
+**/bin/
+**/obj/
+Launcher/
+*.user
+launcher.settings.json
+*.tmp
